@@ -61,3 +61,44 @@ func TestDiscoverCanceledContext(t *testing.T) {
 		t.Fatalf("Discover error = %v, want context.Canceled", err)
 	}
 }
+
+func TestSubnetDestinations(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		subnet     string
+		wantFirst  string
+		wantLast   string
+		wantLength int
+	}{
+		{name: "bare address is slash 24", subnet: "192.168.5.0", wantFirst: "192.168.5.1:9999", wantLast: "192.168.5.254:9999", wantLength: 254},
+		{name: "CIDR", subnet: "192.0.2.8/30", wantFirst: "192.0.2.9:9999", wantLast: "192.0.2.10:9999", wantLength: 2},
+		{name: "host CIDR is masked", subnet: "192.0.2.11/30", wantFirst: "192.0.2.9:9999", wantLast: "192.0.2.10:9999", wantLength: 2},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			destinations, err := subnetDestinations(test.subnet, DefaultPort)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(destinations) != test.wantLength {
+				t.Fatalf("got %d destinations, want %d", len(destinations), test.wantLength)
+			}
+			if got := destinations[0].String(); got != test.wantFirst {
+				t.Fatalf("first destination = %q, want %q", got, test.wantFirst)
+			}
+			if got := destinations[len(destinations)-1].String(); got != test.wantLast {
+				t.Fatalf("last destination = %q, want %q", got, test.wantLast)
+			}
+		})
+	}
+}
+
+func TestSubnetDestinationsRejectsInvalidOrLargeSubnet(t *testing.T) {
+	t.Parallel()
+	for _, subnet := range []string{"not-an-address", "2001:db8::/64", "10.0.0.0/8"} {
+		if _, err := subnetDestinations(subnet, DefaultPort); err == nil {
+			t.Errorf("subnetDestinations(%q) unexpectedly succeeded", subnet)
+		}
+	}
+}

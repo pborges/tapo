@@ -53,7 +53,7 @@ strip, err := tapo.New(
 
 The main API includes:
 
-- UDP discovery with `tapo.Discover`
+- UDP broadcast or subnet discovery with `tapo.Discover`
 - strip and outlet state with `Info`, `Outlets`, and `Snapshot`
 - single or batch switching with `SetOutlet`, `SetOutletAt`, and `SetOutlets`
 - outlet naming and strip LED control
@@ -66,10 +66,10 @@ energy meter fails. Check the snapshot before treating the error as fatal.
 
 ## Terminal dashboard
 
-Run against a known address:
+Run against one or more known addresses (the flag may also be repeated):
 
 ```sh
-go run ./cmd/tapo -host 192.168.1.42
+go run ./cmd/tapo -hosts 192.168.1.42,192.168.1.43
 ```
 
 For an authenticated KLAP device, pass credentials through the environment so
@@ -78,7 +78,7 @@ the password is not exposed in the process list or shell history:
 ```sh
 export TAPO_USERNAME='owner@example.com'
 export TAPO_PASSWORD='account-password'
-go run ./cmd/tapo -host 192.168.1.42
+go run ./cmd/tapo -hosts 192.168.1.42
 ```
 
 Or omit the address to use UDP discovery:
@@ -87,11 +87,25 @@ Or omit the address to use UDP discovery:
 go run ./cmd/tapo
 ```
 
-Use the arrow keys (or `j`/`k`) to select an outlet, Space or Enter to toggle
-it, `r` to refresh, and `q` to quit.
+To probe a specific `/24`, pass its network address. CIDR notation is also
+accepted (up to a `/16`):
+
+```sh
+go run ./cmd/tapo -subnet 192.168.5.0
+go run ./cmd/tapo -subnet 192.168.4.0/23
+```
+
+From the library, provide the subnet after the timeout:
+
+```go
+devices, err := tapo.Discover(ctx, 5*time.Second, "192.168.5.0")
+```
+
+The dashboard displays every discovered or configured HS300. Use the arrow
+keys (or `j`/`k`) to select outlets across all strips, Space or Enter to
+toggle, `r` to refresh all strips, and `q` to quit.
 
 Some firmware versions require enabling local/third-party control in the Tapo
 app under **Me → Third-Party Services → Third-Party Compatibility** (or in the
-Kasa app under **Me → Settings → Third-Party Compatibility**). Automatic
-discovery currently uses the legacy UDP/9999 broadcast; pass `-host` for KLAP
-devices or devices on another VLAN.
+Kasa app under **Me → Settings → Third-Party Compatibility**). Discovery uses
+the legacy UDP/9999 protocol; use `-hosts` for KLAP-only devices.
