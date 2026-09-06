@@ -65,7 +65,10 @@ type DeviceError struct {
 }
 
 func (e *DeviceError) Error() string {
-	where := e.Module + "." + e.Command
+	where := e.Command
+	if e.Module != "" {
+		where = e.Module + "." + e.Command
+	}
 	if e.Message != "" {
 		return fmt.Sprintf("tapo: %s failed (%d): %s", where, e.Code, e.Message)
 	}

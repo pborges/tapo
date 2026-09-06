@@ -1,4 +1,4 @@
-// Command tapo is an interactive terminal dashboard for Kasa/Tapo HS300 power strips.
+// Command tapo is an interactive terminal dashboard for HS300 and P316M power strips.
 package main
 
 import (
@@ -61,12 +61,13 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	type endpoint struct {
-		host string
-		port int
+		host     string
+		port     int
+		httpPort int
 	}
 	endpoints := make([]endpoint, 0, len(opts.hosts))
 	for _, host := range opts.hosts {
-		endpoints = append(endpoints, endpoint{host: host, port: opts.port})
+		endpoints = append(endpoints, endpoint{host: host, port: opts.port, httpPort: 80})
 	}
 	if len(endpoints) == 0 {
 		fmt.Fprintln(os.Stderr, "Discovering Kasa/Tapo devices…")
@@ -75,20 +76,23 @@ func main() {
 			log.Fatal(err)
 		}
 		for _, device := range devices {
-			if !strings.HasPrefix(strings.ToUpper(device.Device.Model), "HS300") {
+			model := strings.ToUpper(device.Device.Model)
+			if !strings.HasPrefix(model, "HS300") && !strings.HasPrefix(model, "P316M") {
 				continue
 			}
-			endpoints = append(endpoints, endpoint{host: device.Host, port: device.Port})
+			endpoints = append(endpoints, endpoint{host: device.Host, port: opts.port, httpPort: device.HTTPPort})
 			fmt.Fprintf(os.Stderr, "Found %s (%s) at %s\n", device.Device.Alias, device.Device.Model, device.Host)
 		}
 		if len(endpoints) == 0 {
-			log.Fatal("no HS300 devices found; pass -hosts with one or more strip IP addresses")
+			log.Fatal("no HS300 or P316M devices found; pass -hosts with one or more strip IP addresses")
 		}
 	}
 
 	strips := make([]*tapo.Strip, 0, len(endpoints))
 	for _, endpoint := range endpoints {
-		clientOptions := []tapo.Option{tapo.WithPort(endpoint.port), tapo.WithTimeout(opts.timeout)}
+		clientOptions := []tapo.Option{
+			tapo.WithPort(endpoint.port), tapo.WithHTTPPort(endpoint.httpPort), tapo.WithTimeout(opts.timeout),
+		}
 		if opts.username != "" || opts.password != "" {
 			clientOptions = append(clientOptions, tapo.WithCredentials(opts.username, opts.password))
 		}
@@ -109,7 +113,7 @@ func parseOptions(args []string, stderr io.Writer) (options, error) {
 	var opts options
 	flags := flag.NewFlagSet("tapo", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	flags.Var(&opts.hosts, "hosts", "HS300 hostnames or IPs, comma-separated or repeated (omit to discover)")
+	flags.Var(&opts.hosts, "hosts", "HS300 or P316M hostnames/IPs, comma-separated or repeated (omit to discover)")
 	flags.StringVar(&opts.subnet, "subnet", "", "IPv4 subnet to scan during discovery (bare address means /24)")
 	flags.IntVar(&opts.port, "port", tapo.DefaultPort, "local protocol port")
 	flags.DurationVar(&opts.interval, "interval", 2*time.Second, "meter refresh interval")

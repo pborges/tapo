@@ -10,19 +10,56 @@ import (
 )
 
 type systemInfoResponse struct {
-	System struct {
+	ErrorCode int `json:"error_code"`
+	System    struct {
 		GetSysInfo *wireSystemInfo `json:"get_sysinfo"`
 	} `json:"system"`
 }
 
+var errLegacyAPIUnsupported = errors.New("tapo: legacy device API is unsupported")
+
+const (
+	deviceAPIUnknown uint32 = iota
+	deviceAPILegacy
+	deviceAPIModern
+)
+
 func (s *Strip) systemInfo(ctx context.Context) (DeviceInfo, []Outlet, error) {
+	switch s.apiMode.Load() {
+	case deviceAPILegacy:
+		return s.legacySystemInfo(ctx)
+	case deviceAPIModern:
+		return s.modernSystemInfo(ctx)
+	}
+
+	info, outlets, err := s.legacySystemInfo(ctx)
+	if err == nil {
+		s.apiMode.CompareAndSwap(deviceAPIUnknown, deviceAPILegacy)
+		return info, outlets, nil
+	}
+	if !errors.Is(err, errLegacyAPIUnsupported) {
+		return DeviceInfo{}, nil, err
+	}
+
+	info, outlets, err = s.modernSystemInfo(ctx)
+	if err != nil {
+		return DeviceInfo{}, nil, fmt.Errorf("tapo: detect modern device API: %w", err)
+	}
+	s.apiMode.CompareAndSwap(deviceAPIUnknown, deviceAPIModern)
+	return info, outlets, nil
+}
+
+func (s *Strip) legacySystemInfo(ctx context.Context) (DeviceInfo, []Outlet, error) {
 	request := map[string]any{"system": map[string]any{"get_sysinfo": nil}}
 	var response systemInfoResponse
 	if err := s.query(ctx, request, &response); err != nil {
 		return DeviceInfo{}, nil, err
 	}
+	if response.ErrorCode != 0 {
+		return DeviceInfo{}, nil, errLegacyAPIUnsupported
+	}
 	if response.System.GetSysInfo == nil {
-		return DeviceInfo{}, nil, errors.New("tapo: response is missing system.get_sysinfo")
+		return DeviceInfo{}, nil, errLegacyAPIUnsupported
 	}
 	wire := *response.System.GetSysInfo
 	if err := checkDeviceError("system", "get_sysinfo", wire.errorFields); err != nil {
@@ -87,6 +124,13 @@ func (s *Strip) Energy(ctx context.Context, outletID string) (Energy, error) {
 	if strings.TrimSpace(outletID) == "" {
 		return Energy{}, errors.New("tapo: outlet ID is required")
 	}
+	apiMode, err := s.ensureAPIMode(ctx)
+	if err != nil {
+		return Energy{}, err
+	}
+	if apiMode == deviceAPIModern {
+		return s.modernEnergy(ctx, outletID)
+	}
 	request := childRequest(outletID, "emeter", "get_realtime", map[string]any{})
 	var response energyResponse
 	if err := s.query(ctx, request, &response); err != nil {
@@ -116,6 +160,13 @@ func (s *Strip) SetOutlets(ctx context.Context, outletIDs []string, on bool) err
 		if strings.TrimSpace(id) == "" {
 			return errors.New("tapo: outlet IDs cannot be empty")
 		}
+	}
+	apiMode, err := s.ensureAPIMode(ctx)
+	if err != nil {
+		return err
+	}
+	if apiMode == deviceAPIModern {
+		return s.modernSetOutlets(ctx, outletIDs, on)
 	}
 	state := 0
 	if on {
@@ -157,6 +208,13 @@ func (s *Strip) RenameOutlet(ctx context.Context, outletID, alias string) error 
 	if strings.TrimSpace(outletID) == "" {
 		return errors.New("tapo: outlet ID is required")
 	}
+	apiMode, err := s.ensureAPIMode(ctx)
+	if err != nil {
+		return err
+	}
+	if apiMode == deviceAPIModern {
+		return s.modernRenameOutlet(ctx, outletID, alias)
+	}
 	request := childRequest(outletID, "system", "set_dev_alias", map[string]string{"alias": alias})
 	var response struct {
 		System struct {
@@ -174,6 +232,13 @@ func (s *Strip) RenameOutlet(ctx context.Context, outletID, alias string) error 
 
 // SetLED enables or disables the strip's status LED.
 func (s *Strip) SetLED(ctx context.Context, enabled bool) error {
+	apiMode, err := s.ensureAPIMode(ctx)
+	if err != nil {
+		return err
+	}
+	if apiMode == deviceAPIModern {
+		return s.modernSetLED(ctx, enabled)
+	}
 	ledOff := 1
 	if enabled {
 		ledOff = 0
@@ -197,6 +262,13 @@ func (s *Strip) SetLED(ctx context.Context, enabled bool) error {
 func (s *Strip) DailyEnergy(ctx context.Context, outletID string, date time.Time) ([]DailyUsage, error) {
 	if strings.TrimSpace(outletID) == "" {
 		return nil, errors.New("tapo: outlet ID is required")
+	}
+	apiMode, err := s.ensureAPIMode(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if apiMode == deviceAPIModern {
+		return s.modernDailyEnergy(ctx, outletID, date)
 	}
 	params := map[string]int{"month": int(date.Month()), "year": date.Year()}
 	request := childRequest(outletID, "emeter", "get_daystat", params)
@@ -232,6 +304,13 @@ func (s *Strip) MonthlyEnergy(ctx context.Context, outletID string, year int) ([
 	}
 	if year < 2000 || year > 9999 {
 		return nil, fmt.Errorf("tapo: invalid year %d", year)
+	}
+	apiMode, err := s.ensureAPIMode(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if apiMode == deviceAPIModern {
+		return s.modernMonthlyEnergy(ctx, outletID, year)
 	}
 	request := childRequest(outletID, "emeter", "get_monthstat", map[string]int{"year": year})
 	var response struct {

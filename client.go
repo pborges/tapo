@@ -81,6 +81,7 @@ type Strip struct {
 	dialer   net.Dialer
 	klap     *klapTransport
 	mode     atomic.Uint32
+	apiMode  atomic.Uint32
 	detectMu sync.Mutex
 	legacyMu sync.Mutex
 }

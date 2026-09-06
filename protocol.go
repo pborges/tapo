@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	// DefaultPort is the TCP and UDP port used by legacy Kasa devices.
+	// DefaultPort is the TCP port used by the legacy Kasa local protocol.
 	DefaultPort = 9999
 	initialKey  = byte(0xab)
 	maxFrameLen = 1 << 20

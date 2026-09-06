@@ -1,9 +1,10 @@
 # tapo
 
 `tapo` is a Go library and terminal dashboard for TP-Link Kasa/Tapo devices,
-with first-class support for the HS300 power strip. It automatically supports
-the legacy XOR protocol on port 9999 and authenticated KLAP v1/v2 on port 80.
-It communicates directly over the LAN; it does not use TP-Link's cloud API.
+with first-class support for the HS300 and P316M power strips. It automatically
+supports the legacy XOR protocol on port 9999 and authenticated KLAP v1/v2 on
+port 80. It communicates directly over the LAN; it does not use TP-Link's cloud
+API.
 
 ## Library
 
@@ -51,6 +52,15 @@ strip, err := tapo.New(
 )
 ```
 
+The P316M also requires those credentials. It may be addressed explicitly:
+
+```go
+strip, err := tapo.New(
+	"192.168.1.43",
+	tapo.WithCredentials("owner@example.com", "account-password"),
+)
+```
+
 The main API includes:
 
 - UDP broadcast or subnet discovery with `tapo.Discover`
@@ -81,7 +91,7 @@ export TAPO_PASSWORD='account-password'
 go run ./cmd/tapo -hosts 192.168.1.42
 ```
 
-Or omit the address to use UDP discovery:
+Or omit the address to use encrypted UDP/20002 discovery:
 
 ```sh
 go run ./cmd/tapo
@@ -101,11 +111,12 @@ From the library, provide the subnet after the timeout:
 devices, err := tapo.Discover(ctx, 5*time.Second, "192.168.5.0")
 ```
 
-The dashboard displays every discovered or configured HS300. Use the arrow
-keys (or `j`/`k`) to select outlets across all strips, Space or Enter to
-toggle, `r` to refresh all strips, and `q` to quit.
+The dashboard displays discovered or explicitly configured HS300 and P316M
+strips. Use the arrow keys (or `j`/`k`) to select outlets across all strips,
+Space or Enter to toggle, `r` to refresh all strips, and `q` to quit.
 
 Some firmware versions require enabling local/third-party control in the Tapo
 app under **Me → Third-Party Services → Third-Party Compatibility** (or in the
-Kasa app under **Me → Settings → Third-Party Compatibility**). Discovery uses
-the legacy UDP/9999 protocol; use `-hosts` for KLAP-only devices.
+Kasa app under **Me → Settings → Third-Party Compatibility**). Discovery
+uses the newer UDP/20002 protocol. HS300 firmware that does not advertise on
+UDP/20002 must be supplied with `-hosts`.
