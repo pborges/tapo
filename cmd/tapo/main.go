@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -34,6 +35,7 @@ type options struct {
 	port               int
 	interval, timeout  time.Duration
 	username, password string
+	enableLegacy       bool
 }
 
 type stringList []string
@@ -96,6 +98,9 @@ func main() {
 		if opts.username != "" || opts.password != "" {
 			clientOptions = append(clientOptions, tapo.WithCredentials(opts.username, opts.password))
 		}
+		if !opts.enableLegacy {
+			clientOptions = append(clientOptions, tapo.WithDisableLegacy())
+		}
 		strip, err := tapo.New(endpoint.host, clientOptions...)
 		if err != nil {
 			log.Fatal(err)
@@ -120,6 +125,7 @@ func parseOptions(args []string, stderr io.Writer) (options, error) {
 	flags.DurationVar(&opts.timeout, "timeout", 5*time.Second, "network/discovery timeout")
 	flags.StringVar(&opts.username, "username", "", "TP-Link account email (or TAPO_USERNAME)")
 	flags.StringVar(&opts.password, "password", "", "TP-Link account password (prefer TAPO_PASSWORD)")
+	flags.BoolVar(&opts.enableLegacy, "enable-legacy", false, "also try the legacy XOR protocol on port 9999 before KLAP (or TAPO_ENABLE_LEGACY)")
 	if err := flags.Parse(args); err != nil {
 		return options{}, err
 	}
@@ -128,6 +134,11 @@ func parseOptions(args []string, stderr io.Writer) (options, error) {
 	}
 	if opts.password == "" {
 		opts.password = os.Getenv("TAPO_PASSWORD")
+	}
+	if !opts.enableLegacy {
+		if value, err := strconv.ParseBool(os.Getenv("TAPO_ENABLE_LEGACY")); err == nil {
+			opts.enableLegacy = value
+		}
 	}
 	for _, host := range flags.Args() {
 		if err := opts.hosts.Set(host); err != nil {

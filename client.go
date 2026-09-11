@@ -16,11 +16,12 @@ import (
 const defaultTimeout = 5 * time.Second
 
 type config struct {
-	port     int
-	httpPort int
-	timeout  time.Duration
-	username string
-	password string
+	port          int
+	httpPort      int
+	timeout       time.Duration
+	username      string
+	password      string
+	disableLegacy bool
 }
 
 // Option configures a Strip.
@@ -72,18 +73,28 @@ func WithCredentials(username, password string) Option {
 	}
 }
 
+// WithDisableLegacy forces the client to speak only authenticated KLAP over
+// HTTP, skipping the legacy XOR protocol on port 9999 entirely.
+func WithDisableLegacy() Option {
+	return func(c *config) error {
+		c.disableLegacy = true
+		return nil
+	}
+}
+
 // Strip is a client for a Kasa/Tapo power strip. It automatically detects the
 // legacy XOR protocol on port 9999 or authenticated KLAP over HTTP on port 80.
 // It is safe for concurrent use.
 type Strip struct {
-	address  string
-	timeout  time.Duration
-	dialer   net.Dialer
-	klap     *klapTransport
-	mode     atomic.Uint32
-	apiMode  atomic.Uint32
-	detectMu sync.Mutex
-	legacyMu sync.Mutex
+	address       string
+	timeout       time.Duration
+	dialer        net.Dialer
+	klap          *klapTransport
+	mode          atomic.Uint32
+	apiMode       atomic.Uint32
+	detectMu      sync.Mutex
+	legacyMu      sync.Mutex
+	disableLegacy bool
 }
 
 // New creates a client for host. host may be a hostname, an IPv4 address, an
@@ -110,8 +121,11 @@ func New(host string, options ...Option) (*Strip, error) {
 		networkHost = parsedHost
 		address = host
 	}
-	strip := &Strip{address: address, timeout: cfg.timeout}
+	strip := &Strip{address: address, timeout: cfg.timeout, disableLegacy: cfg.disableLegacy}
 	strip.klap = newKlapTransport(networkHost, cfg.httpPort, cfg.timeout, cfg.username, cfg.password)
+	if cfg.disableLegacy {
+		strip.mode.Store(transportKLAP)
+	}
 	return strip, nil
 }
 
