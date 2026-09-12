@@ -188,13 +188,32 @@ type model struct {
 	toggling  bool
 	status    string
 	toggleErr error
+
+	renaming  bool
+	rename    renameState
+	renameErr error
 }
+
+// renameState holds the in-progress text while renaming the outlet at
+// (stripIndex, outletIndex).
+type renameState struct {
+	stripIndex, outletIndex int
+	outletID                string
+	input                   string
+}
+
+const renameMaxRunes = 40 // generous cap so a typo-fueled paste can't run away
 
 type snapshotsMsg struct {
 	snapshots []*tapo.Snapshot
 	errs      []error
 }
 type toggleMsg struct{ err error }
+type renameMsg struct {
+	stripIndex, outletIndex int
+	alias                   string
+	err                     error
+}
 type tickMsg time.Time
 
 func newModel(ctx context.Context, strips []*tapo.Strip, interval time.Duration) model {
@@ -234,8 +253,14 @@ func tickAfter(interval time.Duration) tea.Cmd {
 func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := message.(type) {
 	case tea.KeyMsg:
+		if msg.String() == "ctrl+c" {
+			return m, tea.Quit
+		}
+		if m.renaming {
+			return m.updateRename(msg)
+		}
 		switch msg.String() {
-		case "q", "ctrl+c":
+		case "q":
 			return m, tea.Quit
 		case "up", "k":
 			if m.selected > 0 {
@@ -251,6 +276,14 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				m.status = "Refreshing…"
 				return m, m.fetchSnapshots()
 			}
+		case "n":
+			stripIndex, outletIndex, ok := m.selectedOutlet()
+			if !ok {
+				break
+			}
+			outlet := m.snapshots[stripIndex].Outlets[outletIndex]
+			m.renaming = true
+			m.rename = renameState{stripIndex: stripIndex, outletIndex: outletIndex, outletID: outlet.ID, input: outlet.Alias}
 		case " ", "enter":
 			stripIndex, outletIndex, ok := m.selectedOutlet()
 			if !ok || m.toggling {
@@ -262,6 +295,17 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = fmt.Sprintf("Switching %s…", outlet.Alias)
 			return m, func() tea.Msg {
 				return toggleMsg{err: strip.SetOutlet(m.ctx, outlet.ID, !outlet.On)}
+			}
+		}
+	case renameMsg:
+		m.renameErr = msg.err
+		if msg.err != nil {
+			break
+		}
+		if msg.stripIndex < len(m.snapshots) && m.snapshots[msg.stripIndex] != nil {
+			outlets := m.snapshots[msg.stripIndex].Outlets
+			if msg.outletIndex < len(outlets) {
+				outlets[msg.outletIndex].Alias = msg.alias
 			}
 		}
 	case snapshotsMsg:
@@ -295,6 +339,42 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.fetchSnapshots())
 		}
 		return m, tea.Batch(cmds...)
+	}
+	return m, nil
+}
+
+func (m model) updateRename(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEsc:
+		m.renaming = false
+	case tea.KeyEnter:
+		m.renaming = false
+		alias := strings.TrimSpace(m.rename.input)
+		stripIndex, outletIndex, outletID := m.rename.stripIndex, m.rename.outletIndex, m.rename.outletID
+		if alias == "" {
+			break
+		}
+		if stripIndex < len(m.snapshots) && m.snapshots[stripIndex] != nil && outletIndex < len(m.snapshots[stripIndex].Outlets) {
+			if alias == m.snapshots[stripIndex].Outlets[outletIndex].Alias {
+				break
+			}
+		}
+		strip := m.strips[stripIndex]
+		return m, func() tea.Msg {
+			return renameMsg{stripIndex: stripIndex, outletIndex: outletIndex, alias: alias, err: strip.RenameOutlet(m.ctx, outletID, alias)}
+		}
+	case tea.KeyBackspace, tea.KeyCtrlH:
+		if r := []rune(m.rename.input); len(r) > 0 {
+			m.rename.input = string(r[:len(r)-1])
+		}
+	case tea.KeyRunes:
+		if len([]rune(m.rename.input))+len(msg.Runes) <= renameMaxRunes {
+			m.rename.input += string(msg.Runes)
+		}
+	case tea.KeySpace:
+		if len([]rune(m.rename.input)) < renameMaxRunes {
+			m.rename.input += " "
+		}
 	}
 	return m, nil
 }
@@ -370,8 +450,13 @@ func (m model) View() string {
 				stripPower += outlet.Energy.Power
 				stripEnergy += outlet.Energy.Total
 			}
-			name := truncate(outlet.Alias, 22)
-			line := fmt.Sprintf("   %-3d %-22s %s %9s %9s %9s %10s", i+1, name, state, power, current, voltage, total)
+			var nameField string
+			if m.renaming && stripIndex == m.rename.stripIndex && i == m.rename.outletIndex {
+				nameField = lipgloss.NewStyle().Underline(true).Bold(true).Render(fmt.Sprintf("%-22s", truncate(m.rename.input, 22)))
+			} else {
+				nameField = fmt.Sprintf("%-22s", truncate(outlet.Alias, 22))
+			}
+			line := fmt.Sprintf("   %-3d %s %s %9s %9s %9s %10s", i+1, nameField, state, power, current, voltage, total)
 			if globalIndex == m.selected {
 				line = "›" + line[1:]
 				line = selectedStyle.Render(line)
@@ -395,7 +480,14 @@ func (m model) View() string {
 	if m.toggleErr != nil {
 		b.WriteString(errorStyle.Render("Toggle: "+m.toggleErr.Error()) + "\n")
 	}
-	b.WriteString("\n" + mutedStyle.Render("↑/↓ or j/k select · space/enter toggle · r refresh · q quit"))
+	if m.renameErr != nil {
+		b.WriteString(errorStyle.Render("Rename: "+m.renameErr.Error()) + "\n")
+	}
+	if m.renaming {
+		b.WriteString("\n" + mutedStyle.Render("type a new name · enter save · esc cancel"))
+	} else {
+		b.WriteString("\n" + mutedStyle.Render("↑/↓ or j/k select · space/enter toggle · n rename · r refresh · q quit"))
+	}
 	return b.String()
 }
 

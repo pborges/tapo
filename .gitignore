@@ -19,6 +19,7 @@ go.work.sum
 .env
 .env.*
 !.env.example
+/growctl-schedule.json
 
 # Editors and operating systems
 .idea/
