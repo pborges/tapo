@@ -47,7 +47,7 @@ func nowColumn(now time.Time) int { return minuteOfDay(now) * barTotalWidth / mi
 // renderBar draws `visible` columns of a schedule's on/off state, starting at
 // column `scroll` of the full barTotalWidth timeline. When the schedule is
 // disabled, "on" cells are drawn faint rather than in the live vivid green,
-// since growctl isn't actually enforcing that plan right now.
+// since schedulr isn't actually enforcing that plan right now.
 func renderBar(sched *plugSchedule, scroll, visible int, now time.Time, enabled bool) string {
 	onStyle := barOnStyle
 	if !enabled {

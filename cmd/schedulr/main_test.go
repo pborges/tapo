@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -17,8 +18,8 @@ func TestParseOptionsDefaultsSchedulePath(t *testing.T) {
 	if len(opts.hosts) != 1 || opts.hosts[0] != "192.0.2.10" || opts.tick != 10*time.Second {
 		t.Fatalf("parseOptions = %+v", opts)
 	}
-	if opts.schedulePath == "" {
-		t.Fatal("expected a default schedule path")
+	if filepath.Base(opts.schedulePath) != "schedulr-schedule.json" {
+		t.Fatalf("default schedule path = %q", opts.schedulePath)
 	}
 }
 

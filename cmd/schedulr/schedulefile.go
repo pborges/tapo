@@ -21,7 +21,7 @@ func defaultSchedulePath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "growctl-schedule.json"), nil
+	return filepath.Join(dir, "schedulr-schedule.json"), nil
 }
 
 func loadScheduleFile(path string) (*scheduleFile, error) {

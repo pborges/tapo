@@ -2,6 +2,7 @@
 /bin/
 /dist/
 /tapo
+/schedulr
 *.exe
 *.exe~
 *.dll
@@ -19,7 +20,7 @@ go.work.sum
 .env
 .env.*
 !.env.example
-/growctl-schedule.json
+/schedulr-schedule.json
 
 # Editors and operating systems
 .idea/

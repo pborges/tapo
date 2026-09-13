@@ -1,4 +1,4 @@
-// Command growctl is a TUI daemon that keeps Tapo/Kasa power strip outlets in
+// Command schedulr is a TUI daemon that keeps Tapo/Kasa power strip outlets in
 // sync with a deterministic, time-of-day schedule. It polls every outlet on
 // an interval and corrects any relay that has drifted from what its schedule
 // calls for.
@@ -119,7 +119,7 @@ func main() {
 
 func parseOptions(args []string, stderr io.Writer) (options, error) {
 	var opts options
-	flags := flag.NewFlagSet("growctl", flag.ContinueOnError)
+	flags := flag.NewFlagSet("schedulr", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	flags.Var(&opts.hosts, "hosts", "HS300 or P316M hostnames/IPs, comma-separated or repeated (omit to discover)")
 	flags.StringVar(&opts.subnet, "subnet", "", "IPv4 subnet to scan during discovery (bare address means /24)")
@@ -129,7 +129,7 @@ func parseOptions(args []string, stderr io.Writer) (options, error) {
 	flags.StringVar(&opts.username, "username", "", "TP-Link account email (or TAPO_USERNAME)")
 	flags.StringVar(&opts.password, "password", "", "TP-Link account password (prefer TAPO_PASSWORD)")
 	flags.BoolVar(&opts.enableLegacy, "enable-legacy", false, "also try the legacy XOR protocol on port 9999 before KLAP (or TAPO_ENABLE_LEGACY)")
-	flags.StringVar(&opts.schedulePath, "schedule", "", "path to the schedule JSON file (default: ./growctl-schedule.json in the working directory)")
+	flags.StringVar(&opts.schedulePath, "schedule", "", "path to the schedule JSON file (default: ./schedulr-schedule.json in the working directory)")
 	if err := flags.Parse(args); err != nil {
 		return options{}, err
 	}

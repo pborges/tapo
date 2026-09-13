@@ -95,7 +95,7 @@ func (m model) updateRename(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m model) viewList() string {
 	var lines []string
-	lines = append(lines, listTitleStyle.Render("growctl — deterministic plug scheduler"))
+	lines = append(lines, listTitleStyle.Render("schedulr — deterministic plug scheduler"))
 
 	if len(m.plugs) == 0 {
 		lines = append(lines, "", m.status)
