@@ -1,0 +1,15 @@
+# Keep build context to Go sources; never ship local config or secrets.
+.git
+.github
+.idea
+.vscode
+.env
+.env.*
+*.json
+!cmd/**/*.json
+/tapo
+/schedulr
+/bin
+/dist
+*.test
+*.out

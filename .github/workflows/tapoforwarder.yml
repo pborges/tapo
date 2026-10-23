@@ -1,0 +1,62 @@
+name: tapoforwarder
+
+on:
+  push:
+    tags:
+      - "tapoforwarder-v[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/tapoforwarder
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test -race ./...
+
+  image:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=match,pattern=tapoforwarder-v(\d+\.\d+\.\d+),group=1
+            type=match,pattern=tapoforwarder-v(\d+\.\d+)\.\d+,group=1
+            type=raw,value=latest
+            type=sha,format=short
+          labels: |
+            org.opencontainers.image.title=tapoforwarder
+            org.opencontainers.image.description=Prometheus exporter and web UI for Tapo/Kasa HS300 and P316M power strips
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: cmd/tapoforwarder/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

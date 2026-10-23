@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tapo Forwarder</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #fff; --text: #1d2330; --muted: #6b7385; --line: #e3e6ec;
+    --accent: #d63384; --on: #1f9d55; --off: #9aa1ae; --err: #d64545; --input: #fff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151b; --panel: #1b1f27; --text: #e6e9ef; --muted: #8b93a5; --line: #2b313c;
+      --accent: #f06aa8; --on: #3ccf7f; --off: #5d6474; --err: #ff6b6b; --input: #12151b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, -apple-system, sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 16px; }
+  header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+  h1 { font-size: 20px; margin: 0; color: var(--accent); }
+  .muted { color: var(--muted); }
+  .err { color: var(--err); }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px; margin-bottom: 16px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .grow { flex: 1; }
+  h2 { font-size: 16px; margin: 0; }
+  input[type=text] { background: var(--input); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font: inherit; min-width: 0; }
+  button { background: transparent; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; font: inherit; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+  th, td { text-align: left; padding: 6px 8px; border-top: 1px solid var(--line); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .name { cursor: text; border-bottom: 1px dashed transparent; }
+  .name:hover { border-bottom-color: var(--muted); }
+  .switch { width: 44px; height: 24px; border-radius: 12px; border: none; padding: 0; position: relative; background: var(--off); }
+  .switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; transition: left .15s; }
+  .switch.on { background: var(--on); }
+  .switch.on::after { left: 23px; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--off); }
+  .dot.up { background: var(--on); }
+  .dot.down { background: var(--err); }
+  .tag { font-size: 12px; border: 1px solid var(--line); border-radius: 4px; padding: 1px 6px; color: var(--muted); }
+  #toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--err); color: #fff; padding: 8px 14px; border-radius: 6px; display: none; max-width: calc(100% - 32px); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Tapo Forwarder</h1>
+    <span class="muted" id="summary"></span>
+    <span class="grow"></span>
+    <a class="muted" href="metrics">/metrics</a>
+  </header>
+
+  <section class="panel">
+    <div class="row">
+      <h2 class="grow">Add strips</h2>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <input type="text" id="subnet" placeholder="Subnet, e.g. 192.168.1.0/24 (empty = broadcast)" class="grow">
+      <button class="primary" id="scan">Scan</button>
+      <span class="muted">or</span>
+      <input type="text" id="host" placeholder="Host / IP">
+      <button id="add">Add</button>
+    </div>
+    <div id="scanResults"></div>
+  </section>
+
+  <div id="strips"></div>
+</main>
+<div id="toast"></div>
+
+<script>
+const $ = (sel) => document.querySelector(sel);
+let editing = false; // pause re-rendering while an inline rename is open
+let busy = false;
+
+function esc(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function toast(message) {
+  const el = $("#toast");
+  el.textContent = message;
+  el.style.display = "block";
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => (el.style.display = "none"), 5000);
+}
+
+async function api(method, path, body) {
+  const response = await fetch(path, {
+    method,
+    headers: body ? { "Content-Type": "application/json" } : {},
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!response.ok) {
+    let message = response.statusText;
+    try { message = (await response.json()).error || message; } catch {}
+    throw new Error(message);
+  }
+  return response.status === 204 || response.status === 202 ? null : response.json();
+}
+
+function duration(seconds) {
+  if (!seconds) return "—";
+  const d = Math.floor(seconds / 86400), h = Math.floor(seconds % 86400 / 3600), m = Math.floor(seconds % 3600 / 60);
+  return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
+}
+
+function renderStrips(strips) {
+  const total = strips.reduce((sum, s) => sum + s.power_w, 0);
+  const online = strips.filter((s) => s.online).length;
+  $("#summary").textContent = strips.length
+    ? `${online}/${strips.length} online · ${total.toFixed(1)} W total`
+    : "";
+  if (!strips.length) {
+    $("#strips").innerHTML = `<div class="panel muted">No strips configured yet. Scan or add one by host above.</div>`;
+    return;
+  }
+  $("#strips").innerHTML = strips.map((s) => {
+    const h = encodeURIComponent(s.host);
+    const status = s.online ? "up" : (s.error ? "down" : "");
+    const updated = s.last_success ? new Date(s.last_success).toLocaleTimeString() : "never";
+    const rows = s.outlets.map((o) => `
+      <tr>
+        <td>${o.index}</td>
+        <td><span class="name" data-rename="outlet" data-host="${h}" data-id="${esc(o.id)}" title="Click to rename">${esc(o.alias)}</span></td>
+        <td><button class="switch ${o.on ? "on" : ""}" data-toggle data-host="${h}" data-id="${esc(o.id)}" data-on="${o.on}" ${s.online ? "" : "disabled"} aria-label="Toggle ${esc(o.alias)}"></button></td>
+        <td class="num">${o.metered ? o.power_w.toFixed(1) + " W" : "—"}</td>
+        <td class="num">${o.metered ? o.current_a.toFixed(3) + " A" : "—"}</td>
+        <td class="num">${o.metered ? o.voltage_v.toFixed(1) + " V" : "—"}</td>
+        <td class="num">${o.metered ? o.total_kwh.toFixed(3) + " kWh" : "—"}</td>
+        <td class="num muted">${o.on ? duration(o.on_time_s) : "—"}</td>
+      </tr>`).join("");
+    return `
+      <section class="panel">
+        <div class="row">
+          <span class="dot ${status}"></span>
+          <h2><span class="name" data-rename="strip" data-host="${h}" title="Click to rename">${esc(s.alias || s.host)}</span></h2>
+          ${s.model ? `<span class="tag">${esc(s.model)}</span>` : ""}
+          <span class="muted">${esc(s.host)}</span>
+          <span class="grow"></span>
+          <span class="muted">${s.power_w.toFixed(1)} W · RSSI ${s.rssi} dBm · ${updated}</span>
+          <button data-refresh data-host="${h}">Refresh</button>
+          <button data-remove data-host="${h}">Remove</button>
+        </div>
+        ${s.error ? `<div class="err" style="margin-top:6px">${esc(s.error)}</div>` : ""}
+        <div class="table-wrap"><table>
+          <thead><tr><th>#</th><th>Outlet</th><th>State</th><th class="num">Power</th><th class="num">Current</th><th class="num">Voltage</th><th class="num">Total</th><th class="num">On for</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table></div>
+      </section>`;
+  }).join("");
+}
+
+async function load() {
+  if (editing || busy) return;
+  try {
+    renderStrips(await api("GET", "api/strips"));
+  } catch (err) {
+    toast("Load failed: " + err.message);
+  }
+}
+
+// After a command the poller refreshes in the background; reload shortly after.
+async function act(fn) {
+  busy = true;
+  try { await fn(); } catch (err) { toast(err.message); }
+  busy = false;
+  load();
+  setTimeout(load, 1500);
+}
+
+function startRename(el) {
+  editing = true;
+  const original = el.textContent;
+  const input = document.createElement("input");
+  input.type = "text";
+  input.value = original;
+  input.maxLength = 40;
+  el.replaceWith(input);
+  input.focus();
+  input.select();
+  let done = false;
+  const finish = (save) => {
+    if (done) return;
+    done = true;
+    editing = false;
+    const alias = input.value.trim();
+    if (!save || !alias || alias === original) { load(); return; }
+    const path = el.dataset.rename === "strip"
+      ? `api/strips/${el.dataset.host}/rename`
+      : `api/strips/${el.dataset.host}/outlets/${encodeURIComponent(el.dataset.id)}/rename`;
+    act(() => api("POST", path, { alias }));
+  };
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") finish(true);
+    if (e.key === "Escape") finish(false);
+  });
+  input.addEventListener("blur", () => finish(true));
+}
+
+$("#strips").addEventListener("click", (e) => {
+  const el = e.target.closest("[data-toggle],[data-rename],[data-refresh],[data-remove]");
+  if (!el) return;
+  const host = el.dataset.host;
+  if ("toggle" in el.dataset) {
+    const on = el.dataset.on !== "true";
+    el.classList.toggle("on", on);
+    act(() => api("POST", `api/strips/${host}/outlets/${encodeURIComponent(el.dataset.id)}/state`, { on }));
+  } else if ("rename" in el.dataset) {
+    startRename(el);
+  } else if ("refresh" in el.dataset) {
+    act(() => api("POST", `api/strips/${host}/refresh`));
+  } else if ("remove" in el.dataset) {
+    if (confirm(`Stop monitoring ${decodeURIComponent(host)}?`)) act(() => api("DELETE", `api/strips/${host}`));
+  }
+});
+
+async function addStrip(device) {
+  await api("POST", "api/strips", device);
+}
+
+$("#add").addEventListener("click", () => {
+  const host = $("#host").value.trim();
+  if (!host) return;
+  act(async () => { await addStrip({ host }); $("#host").value = ""; });
+});
+
+$("#scan").addEventListener("click", async () => {
+  const button = $("#scan");
+  button.disabled = true;
+  button.textContent = "Scanning…";
+  $("#scanResults").innerHTML = "";
+  try {
+    const result = await api("POST", "api/scan", { subnet: $("#subnet").value });
+    renderScan(result.devices);
+  } catch (err) {
+    toast("Scan failed: " + err.message);
+  }
+  button.disabled = false;
+  button.textContent = "Scan";
+});
+
+function renderScan(devices) {
+  if (!devices.length) {
+    $("#scanResults").innerHTML = `<p class="muted">No HS300 or P316M strips found.</p>`;
+    return;
+  }
+  $("#scanResults").innerHTML = `<div class="table-wrap"><table>
+    <thead><tr><th>Name</th><th>Model</th><th>Host</th><th>MAC</th><th></th></tr></thead>
+    <tbody>${devices.map((d, i) => `
+      <tr>
+        <td>${esc(d.alias)}</td><td>${esc(d.model)}</td><td>${esc(d.host)}</td><td class="muted">${esc(d.mac)}</td>
+        <td class="num">${d.added ? `<span class="muted">Added</span>` : `<button data-scan-add="${i}">Add</button>`}</td>
+      </tr>`).join("")}</tbody></table></div>`;
+  $("#scanResults").onclick = (e) => {
+    const el = e.target.closest("[data-scan-add]");
+    if (!el) return;
+    const d = devices[Number(el.dataset.scanAdd)];
+    act(async () => {
+      await addStrip({ host: d.host, http_port: d.http_port, alias: d.alias, model: d.model });
+      el.replaceWith(Object.assign(document.createElement("span"), { className: "muted", textContent: "Added" }));
+    });
+  };
+}
+
+api("GET", "api/settings").then((s) => { $("#subnet").value = s.subnet || ""; }).catch(() => {});
+load();
+setInterval(load, 2000);
+</script>
+</body>
+</html>
