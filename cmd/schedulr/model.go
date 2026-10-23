@@ -45,7 +45,8 @@ type model struct {
 	cfg     *scheduleFile
 
 	plugs    []plug
-	selected int
+	selected int // index into plugs; always on the active tab when it has any
+	tab      int // active strip index
 	busy     bool
 
 	width  int // terminal width; defaultWidth until the first WindowSizeMsg arrives
@@ -301,9 +302,7 @@ func (m *model) applyRefresh(msg refreshMsg) {
 	if m.status == "Connecting…" {
 		m.status = ""
 	}
-	if m.selected >= len(m.plugs) {
-		m.selected = max(0, len(m.plugs)-1)
-	}
+	m.ensureSelectionInTab()
 }
 
 func (m model) plugName(i int) string {

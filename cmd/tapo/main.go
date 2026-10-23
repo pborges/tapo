@@ -183,11 +183,13 @@ type model struct {
 	interval  time.Duration
 	snapshots []*tapo.Snapshot
 	errs      []error
-	selected  int
+	tab       int // active strip
+	selected  int // outlet index within the active strip
 	loading   bool
 	toggling  bool
 	status    string
 	toggleErr error
+	width     int
 
 	renaming  bool
 	rename    renameState
@@ -200,6 +202,7 @@ type renameState struct {
 	stripIndex, outletIndex int
 	outletID                string
 	input                   string
+	device                  bool // renaming the strip itself rather than an outlet
 }
 
 const renameMaxRunes = 40 // generous cap so a typo-fueled paste can't run away
@@ -212,6 +215,7 @@ type toggleMsg struct{ err error }
 type renameMsg struct {
 	stripIndex, outletIndex int
 	alias                   string
+	device                  bool
 	err                     error
 }
 type tickMsg time.Time
@@ -267,15 +271,25 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				m.selected--
 			}
 		case "down", "j":
-			if m.selected+1 < m.outletCount() {
+			if m.selected+1 < m.tabOutletCount() {
 				m.selected++
 			}
+		case "tab":
+			m.switchTab(1)
+		case "shift+tab":
+			m.switchTab(-1)
 		case "r":
 			if !m.loading && !m.toggling {
 				m.loading = true
 				m.status = "Refreshing…"
 				return m, m.fetchSnapshots()
 			}
+		case "N":
+			if m.tab >= len(m.snapshots) || m.snapshots[m.tab] == nil {
+				break
+			}
+			m.renaming = true
+			m.rename = renameState{stripIndex: m.tab, device: true, input: m.snapshots[m.tab].Device.Alias}
 		case "n":
 			stripIndex, outletIndex, ok := m.selectedOutlet()
 			if !ok {
@@ -297,9 +311,17 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				return toggleMsg{err: strip.SetOutlet(m.ctx, outlet.ID, !outlet.On)}
 			}
 		}
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
 	case renameMsg:
 		m.renameErr = msg.err
 		if msg.err != nil {
+			break
+		}
+		if msg.device {
+			if msg.stripIndex < len(m.snapshots) && m.snapshots[msg.stripIndex] != nil {
+				m.snapshots[msg.stripIndex].Device.Alias = msg.alias
+			}
 			break
 		}
 		if msg.stripIndex < len(m.snapshots) && m.snapshots[msg.stripIndex] != nil {
@@ -316,8 +338,8 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.errs = msg.errs
-		if m.selected >= m.outletCount() {
-			m.selected = max(0, m.outletCount()-1)
+		if m.selected >= m.tabOutletCount() {
+			m.selected = max(0, m.tabOutletCount()-1)
 		}
 		if !m.toggling {
 			m.status = ""
@@ -354,6 +376,15 @@ func (m model) updateRename(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if alias == "" {
 			break
 		}
+		if m.rename.device {
+			if stripIndex < len(m.snapshots) && m.snapshots[stripIndex] != nil && alias == m.snapshots[stripIndex].Device.Alias {
+				break
+			}
+			strip := m.strips[stripIndex]
+			return m, func() tea.Msg {
+				return renameMsg{stripIndex: stripIndex, alias: alias, device: true, err: strip.RenameDevice(m.ctx, alias)}
+			}
+		}
 		if stripIndex < len(m.snapshots) && m.snapshots[stripIndex] != nil && outletIndex < len(m.snapshots[stripIndex].Outlets) {
 			if alias == m.snapshots[stripIndex].Outlets[outletIndex].Alias {
 				break
@@ -389,18 +420,91 @@ func (m model) outletCount() int {
 	return total
 }
 
-func (m model) selectedOutlet() (stripIndex, outletIndex int, ok bool) {
-	selected := m.selected
-	for i, snapshot := range m.snapshots {
-		if snapshot == nil {
-			continue
-		}
-		if selected < len(snapshot.Outlets) {
-			return i, selected, true
-		}
-		selected -= len(snapshot.Outlets)
+func (m model) tabOutletCount() int {
+	if m.tab < len(m.snapshots) && m.snapshots[m.tab] != nil {
+		return len(m.snapshots[m.tab].Outlets)
 	}
-	return 0, 0, false
+	return 0
+}
+
+func (m model) selectedOutlet() (stripIndex, outletIndex int, ok bool) {
+	if m.selected < 0 || m.selected >= m.tabOutletCount() {
+		return 0, 0, false
+	}
+	return m.tab, m.selected, true
+}
+
+// switchTab moves to the next (delta=1) or previous (delta=-1) strip,
+// wrapping around at either end.
+func (m *model) switchTab(delta int) {
+	n := len(m.strips)
+	if n < 2 {
+		return
+	}
+	m.tab = ((m.tab+delta)%n + n) % n
+	m.selected = 0
+}
+
+var (
+	tabActiveStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("205")).Padding(0, 1)
+	tabInactiveStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Padding(0, 1)
+	tabErrorStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Padding(0, 1)
+)
+
+// renderTabs draws one tab per strip, windowed around the active tab with
+// ‹ / › marks when they don't all fit in the terminal width.
+func (m model) renderTabs() string {
+	n := len(m.strips)
+	labels := make([]string, n)
+	widths := make([]int, n)
+	for i, strip := range m.strips {
+		label := strip.Address()
+		if i < len(m.snapshots) && m.snapshots[i] != nil && m.snapshots[i].Device.Alias != "" {
+			label = m.snapshots[i].Device.Alias
+		}
+		if m.renaming && m.rename.device && i == m.rename.stripIndex {
+			label = m.rename.input + "▏"
+		}
+		style := tabInactiveStyle
+		if i < len(m.errs) && m.errs[i] != nil {
+			style = tabErrorStyle
+		}
+		if i == m.tab {
+			style = tabActiveStyle
+		}
+		labels[i] = style.Render(truncate(label, 24))
+		widths[i] = lipgloss.Width(labels[i])
+	}
+
+	width := m.width
+	if width <= 0 {
+		width = 80
+	}
+	start, end := m.tab, m.tab // inclusive window
+	used := widths[m.tab]
+	avail := width - 2 // room for the ‹ › marks
+	for grew := true; grew; {
+		grew = false
+		if end+1 < n && used+widths[end+1] <= avail {
+			end++
+			used += widths[end]
+			grew = true
+		}
+		if start > 0 && used+widths[start-1] <= avail {
+			start--
+			used += widths[start]
+			grew = true
+		}
+	}
+
+	left, right := " ", " "
+	if start > 0 {
+		left = mutedStyle.Render("‹")
+	}
+	if end < n-1 {
+		right = mutedStyle.Render("›")
+	}
+	return left + strings.Join(labels[start:end+1], "") + right
 }
 
 func (m model) View() string {
@@ -420,20 +524,26 @@ func (m model) View() string {
 		return b.String()
 	}
 
+	if len(m.strips) > 1 {
+		b.WriteString(m.renderTabs() + "\n")
+	}
 	header := fmt.Sprintf("   %-3s %-22s %-5s %9s %9s %9s %10s", "#", "Outlet", "State", "Power", "Current", "Voltage", "Total")
-	globalIndex := 0
 	var grandPower, grandEnergy float64
 	for stripIndex, s := range m.snapshots {
+		var sec strings.Builder
 		if s == nil {
-			fmt.Fprintf(&b, "\n%s\n", mutedStyle.Render(m.strips[stripIndex].Address()))
+			fmt.Fprintf(&sec, "\n%s\n", mutedStyle.Render(m.strips[stripIndex].Address()))
 			if stripIndex < len(m.errs) && m.errs[stripIndex] != nil {
-				b.WriteString(errorStyle.Render("Last refresh: "+m.errs[stripIndex].Error()) + "\n")
+				sec.WriteString(errorStyle.Render("Last refresh: "+m.errs[stripIndex].Error()) + "\n")
+			}
+			if stripIndex == m.tab {
+				b.WriteString(sec.String())
 			}
 			continue
 		}
-		fmt.Fprintf(&b, "\n%s  %s  %s\n", s.Device.Alias, mutedStyle.Render(s.Device.Model), mutedStyle.Render(m.strips[stripIndex].Address()))
-		b.WriteString(mutedStyle.Render(fmt.Sprintf("Updated %s · RSSI %d dBm", s.UpdatedAt.Format("15:04:05"), s.Device.RSSI)))
-		b.WriteString("\n\n" + mutedStyle.Render(header) + "\n")
+		fmt.Fprintf(&sec, "\n%s  %s  %s\n", s.Device.Alias, mutedStyle.Render(s.Device.Model), mutedStyle.Render(m.strips[stripIndex].Address()))
+		sec.WriteString(mutedStyle.Render(fmt.Sprintf("Updated %s · RSSI %d dBm", s.UpdatedAt.Format("15:04:05"), s.Device.RSSI)))
+		sec.WriteString("\n\n" + mutedStyle.Render(header) + "\n")
 
 		var stripPower, stripEnergy float64
 		for i, outlet := range s.Outlets {
@@ -457,18 +567,20 @@ func (m model) View() string {
 				nameField = fmt.Sprintf("%-22s", truncate(outlet.Alias, 22))
 			}
 			line := fmt.Sprintf("   %-3d %s %s %9s %9s %9s %10s", i+1, nameField, state, power, current, voltage, total)
-			if globalIndex == m.selected {
+			if stripIndex == m.tab && i == m.selected {
 				line = "›" + line[1:]
 				line = selectedStyle.Render(line)
 			}
-			b.WriteString(line + "\n")
-			globalIndex++
+			sec.WriteString(line + "\n")
 		}
 		grandPower += stripPower
 		grandEnergy += stripEnergy
-		fmt.Fprintf(&b, "\nStrip total: %.1f W    Meter totals: %.3f kWh\n", stripPower, stripEnergy)
+		fmt.Fprintf(&sec, "\nStrip total: %.1f W    Meter totals: %.3f kWh\n", stripPower, stripEnergy)
 		if stripIndex < len(m.errs) && m.errs[stripIndex] != nil {
-			b.WriteString(errorStyle.Render("Last refresh: "+m.errs[stripIndex].Error()) + "\n")
+			sec.WriteString(errorStyle.Render("Last refresh: "+m.errs[stripIndex].Error()) + "\n")
+		}
+		if stripIndex == m.tab {
+			b.WriteString(sec.String())
 		}
 	}
 	if len(m.strips) > 1 {
@@ -486,7 +598,7 @@ func (m model) View() string {
 	if m.renaming {
 		b.WriteString("\n" + mutedStyle.Render("type a new name · enter save · esc cancel"))
 	} else {
-		b.WriteString("\n" + mutedStyle.Render("↑/↓ or j/k select · space/enter toggle · n rename · r refresh · q quit"))
+		b.WriteString("\n" + mutedStyle.Render("tab/shift+tab switch strip · ↑/↓ or j/k select · space/enter toggle · n rename outlet · N rename strip · r refresh · q quit"))
 	}
 	return b.String()
 }

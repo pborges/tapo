@@ -36,14 +36,14 @@ func (m model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q":
 		return m, tea.Quit
+	case "tab":
+		m.switchTab(1)
+	case "shift+tab":
+		m.switchTab(-1)
 	case "up", "k":
-		if m.selected > 0 {
-			m.selected--
-		}
+		m.moveSelection(-1)
 	case "down", "j":
-		if m.selected+1 < len(m.plugs) {
-			m.selected++
-		}
+		m.moveSelection(1)
 	case " ":
 		if m.selected < len(m.plugs) {
 			sched := m.plugs[m.selected].schedule
@@ -108,11 +108,16 @@ func (m model) viewList() string {
 		return strings.Join(lines, "\n")
 	}
 
+	if len(m.strips) > 1 {
+		lines = append(lines, m.renderTabs())
+	}
+	tabPlugs := m.tabPlugs()
+
 	now := time.Now()
 	nameWidth := 0
-	for _, p := range m.plugs {
-		if len(p.alias) > nameWidth {
-			nameWidth = len(p.alias)
+	for _, i := range tabPlugs {
+		if len(m.plugs[i].alias) > nameWidth {
+			nameWidth = len(m.plugs[i].alias)
 		}
 	}
 	if m.mode == viewRename && len([]rune(m.rename.input)) > nameWidth {
@@ -133,7 +138,11 @@ func (m model) viewList() string {
 	scroll := clampBarScroll(nowColumn(now)-visible/2, visible)
 	leftMark, rightMark := scrollMarks(scroll, visible)
 
-	for i, p := range m.plugs {
+	if len(tabPlugs) == 0 {
+		lines = append(lines, "", listMutedStyle.Render("  no outlets on this strip"))
+	}
+	for _, i := range tabPlugs {
+		p := m.plugs[i]
 		selected := i == m.selected
 		renaming := m.mode == viewRename && i == m.rename.plugIdx
 
@@ -192,7 +201,7 @@ func (m model) viewList() string {
 	if m.mode == viewRename {
 		lines = append(lines, "", listMutedStyle.Render("type a new name · enter save · esc cancel"))
 	} else {
-		lines = append(lines, "", listMutedStyle.Render("↑/↓ select · space enable/disable · enter edit schedule · r rename · q quit"))
+		lines = append(lines, "", listMutedStyle.Render("tab/shift+tab switch strip · ↑/↓ select · space enable/disable · enter edit schedule · r rename · q quit"))
 	}
 
 	// The correction log fills whatever rows are left in the window.
@@ -202,6 +211,109 @@ func (m model) viewList() string {
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+// tabPlugs returns the indices into m.plugs of the plugs on the active tab.
+func (m model) tabPlugs() []int {
+	var out []int
+	for i := range m.plugs {
+		if m.plugs[i].stripIndex == m.tab {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+// moveSelection moves the cursor by delta among the active tab's plugs.
+func (m *model) moveSelection(delta int) {
+	idxs := m.tabPlugs()
+	for pos, i := range idxs {
+		if i == m.selected {
+			if next := pos + delta; next >= 0 && next < len(idxs) {
+				m.selected = idxs[next]
+			}
+			return
+		}
+	}
+	m.ensureSelectionInTab()
+}
+
+// ensureSelectionInTab snaps the cursor to the first plug of the active tab
+// when it currently points elsewhere. On an empty tab it parks the cursor
+// past the end, which every handler already treats as "nothing selected".
+func (m *model) ensureSelectionInTab() {
+	if m.selected >= 0 && m.selected < len(m.plugs) && m.plugs[m.selected].stripIndex == m.tab {
+		return
+	}
+	if idxs := m.tabPlugs(); len(idxs) > 0 {
+		m.selected = idxs[0]
+	} else {
+		m.selected = len(m.plugs)
+	}
+}
+
+// switchTab moves to the next (delta=1) or previous (delta=-1) strip,
+// wrapping around at either end.
+func (m *model) switchTab(delta int) {
+	n := len(m.strips)
+	if n < 2 {
+		return
+	}
+	m.tab = ((m.tab+delta)%n + n) % n
+	m.selected = -1
+	m.ensureSelectionInTab()
+}
+
+var (
+	tabActiveStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("205")).Padding(0, 1)
+	tabInactiveStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Padding(0, 1)
+	tabErrorStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Padding(0, 1)
+)
+
+// renderTabs draws one tab per strip, windowed around the active tab with
+// ‹ / › marks when they don't all fit in the terminal width.
+func (m model) renderTabs() string {
+	n := len(m.stripAddrs)
+	labels := make([]string, n)
+	widths := make([]int, n)
+	for i, addr := range m.stripAddrs {
+		label := addr
+		style := tabInactiveStyle
+		if i < len(m.stripErrs) && m.stripErrs[i] != nil {
+			style = tabErrorStyle
+		}
+		if i == m.tab {
+			style = tabActiveStyle
+		}
+		labels[i] = style.Render(label)
+		widths[i] = lipgloss.Width(labels[i])
+	}
+
+	start, end := m.tab, m.tab // inclusive window
+	used := widths[m.tab]
+	avail := m.width - 2 // room for the ‹ › marks
+	for grew := true; grew; {
+		grew = false
+		if end+1 < n && used+widths[end+1] <= avail {
+			end++
+			used += widths[end]
+			grew = true
+		}
+		if start > 0 && used+widths[start-1] <= avail {
+			start--
+			used += widths[start]
+			grew = true
+		}
+	}
+
+	left, right := " ", " "
+	if start > 0 {
+		left = listMutedStyle.Render("‹")
+	}
+	if end < n-1 {
+		right = listMutedStyle.Render("›")
+	}
+	return left + strings.Join(labels[start:end+1], "") + right
 }
 
 // renderLog returns the most recent up-to-n correction log entries,

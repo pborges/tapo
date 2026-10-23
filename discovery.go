@@ -78,13 +78,25 @@ func discover(ctx context.Context, timeout time.Duration, destinations ...*net.U
 	if err != nil {
 		return nil, fmt.Errorf("tapo: build discovery request: %w", err)
 	}
+	// A single unreachable destination (e.g. "host is down" for an address
+	// with no ARP entry during a subnet scan) must not abort discovery of
+	// the rest; only fail when nothing could be sent at all.
+	var sendErr error
+	sent := 0
 	for _, destination := range destinations {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		if _, err := conn.WriteToUDP(payload, destination); err != nil {
-			return nil, fmt.Errorf("tapo: send discovery to %s: %w", destination, err)
+			if sendErr == nil {
+				sendErr = fmt.Errorf("tapo: send discovery to %s: %w", destination, err)
+			}
+			continue
 		}
+		sent++
+	}
+	if sent == 0 && sendErr != nil {
+		return nil, sendErr
 	}
 	end := time.Now().Add(timeout)
 	if deadline, ok := ctx.Deadline(); ok && deadline.Before(end) {

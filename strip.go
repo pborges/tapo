@@ -2,6 +2,7 @@ package tapo
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
@@ -91,7 +92,12 @@ func (s *Strip) Snapshot(ctx context.Context) (*Snapshot, error) {
 		return nil, err
 	}
 	snapshot := &Snapshot{Device: info, Outlets: outlets, UpdatedAt: time.Now()}
-	meterCtx, cancel := context.WithTimeout(ctx, s.timeout)
+	// KLAP serializes requests on one session, so the outlet reads queue up
+	// behind each other; give each one its own timeout's worth of budget
+	// rather than sharing a single timeout (slow devices like the HS300 can
+	// take over a second per request). The caller's deadline still applies.
+	meterTimeout := s.timeout * time.Duration(max(1, len(outlets)))
+	meterCtx, cancel := context.WithTimeout(ctx, meterTimeout)
 	defer cancel()
 
 	var wg sync.WaitGroup
@@ -216,6 +222,36 @@ func (s *Strip) RenameOutlet(ctx context.Context, outletID, alias string) error 
 		return s.modernRenameOutlet(ctx, outletID, alias)
 	}
 	request := childRequest(outletID, "system", "set_dev_alias", map[string]string{"alias": alias})
+	var response struct {
+		System struct {
+			SetAlias *errorFields `json:"set_dev_alias"`
+		} `json:"system"`
+	}
+	if err := s.query(ctx, request, &response); err != nil {
+		return err
+	}
+	if response.System.SetAlias == nil {
+		return errors.New("tapo: response is missing system.set_dev_alias")
+	}
+	return checkDeviceError("system", "set_dev_alias", *response.System.SetAlias)
+}
+
+// RenameDevice changes the alias of the strip itself (not one of its outlets).
+func (s *Strip) RenameDevice(ctx context.Context, alias string) error {
+	if strings.TrimSpace(alias) == "" {
+		return errors.New("tapo: alias is required")
+	}
+	apiMode, err := s.ensureAPIMode(ctx)
+	if err != nil {
+		return err
+	}
+	if apiMode == deviceAPIModern {
+		return s.modernCommand(ctx, modernRequest{
+			Method: "set_device_info",
+			Params: map[string]string{"nickname": base64.StdEncoding.EncodeToString([]byte(alias))},
+		})
+	}
+	request := map[string]any{"system": map[string]any{"set_dev_alias": map[string]string{"alias": alias}}}
 	var response struct {
 		System struct {
 			SetAlias *errorFields `json:"set_dev_alias"`

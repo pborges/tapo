@@ -122,7 +122,8 @@ func TestMultipleStripSelection(t *testing.T) {
 			{Device: tapo.DeviceInfo{Alias: "Office"}, Outlets: []tapo.Outlet{{Alias: "One"}, {Alias: "Two"}}},
 			{Device: tapo.DeviceInfo{Alias: "Lab"}, Outlets: []tapo.Outlet{{Alias: "Three"}}},
 		},
-		selected: 2,
+		tab:      1,
+		selected: 0,
 	}
 	stripIndex, outletIndex, ok := m.selectedOutlet()
 	if !ok || stripIndex != 1 || outletIndex != 0 {
