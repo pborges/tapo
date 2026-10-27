@@ -48,7 +48,7 @@ jobs:
             type=sha,format=short
           labels: |
             org.opencontainers.image.title=tapoforwarder
-            org.opencontainers.image.description=Prometheus exporter and web UI for Tapo/Kasa HS300 and P316M power strips
+            org.opencontainers.image.description=Prometheus exporter and web UI for Tapo/Kasa HS300 and P316M power strips and P110M plugs
 
       - uses: docker/build-push-action@v6
         with:

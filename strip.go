@@ -23,13 +23,17 @@ const (
 	deviceAPIUnknown uint32 = iota
 	deviceAPILegacy
 	deviceAPIModern
+	// deviceAPIModernPlug is a single-socket device such as the P110M. It
+	// speaks the modern API but has no children, so it is presented as a strip
+	// with one outlet whose ID is the device ID.
+	deviceAPIModernPlug
 )
 
 func (s *Strip) systemInfo(ctx context.Context) (DeviceInfo, []Outlet, error) {
 	switch s.apiMode.Load() {
 	case deviceAPILegacy:
 		return s.legacySystemInfo(ctx)
-	case deviceAPIModern:
+	case deviceAPIModern, deviceAPIModernPlug:
 		return s.modernSystemInfo(ctx)
 	}
 
@@ -42,11 +46,11 @@ func (s *Strip) systemInfo(ctx context.Context) (DeviceInfo, []Outlet, error) {
 		return DeviceInfo{}, nil, err
 	}
 
+	// modernSystemInfo records whether the device is a strip or a plug.
 	info, outlets, err = s.modernSystemInfo(ctx)
 	if err != nil {
 		return DeviceInfo{}, nil, fmt.Errorf("tapo: detect modern device API: %w", err)
 	}
-	s.apiMode.CompareAndSwap(deviceAPIUnknown, deviceAPIModern)
 	return info, outlets, nil
 }
 
@@ -134,7 +138,7 @@ func (s *Strip) Energy(ctx context.Context, outletID string) (Energy, error) {
 	if err != nil {
 		return Energy{}, err
 	}
-	if apiMode == deviceAPIModern {
+	if apiMode != deviceAPILegacy {
 		return s.modernEnergy(ctx, outletID)
 	}
 	request := childRequest(outletID, "emeter", "get_realtime", map[string]any{})
@@ -171,7 +175,7 @@ func (s *Strip) SetOutlets(ctx context.Context, outletIDs []string, on bool) err
 	if err != nil {
 		return err
 	}
-	if apiMode == deviceAPIModern {
+	if apiMode != deviceAPILegacy {
 		return s.modernSetOutlets(ctx, outletIDs, on)
 	}
 	state := 0
@@ -218,7 +222,7 @@ func (s *Strip) RenameOutlet(ctx context.Context, outletID, alias string) error 
 	if err != nil {
 		return err
 	}
-	if apiMode == deviceAPIModern {
+	if apiMode != deviceAPILegacy {
 		return s.modernRenameOutlet(ctx, outletID, alias)
 	}
 	request := childRequest(outletID, "system", "set_dev_alias", map[string]string{"alias": alias})
@@ -245,7 +249,7 @@ func (s *Strip) RenameDevice(ctx context.Context, alias string) error {
 	if err != nil {
 		return err
 	}
-	if apiMode == deviceAPIModern {
+	if apiMode != deviceAPILegacy {
 		return s.modernCommand(ctx, modernRequest{
 			Method: "set_device_info",
 			Params: map[string]string{"nickname": base64.StdEncoding.EncodeToString([]byte(alias))},
@@ -272,7 +276,7 @@ func (s *Strip) SetLED(ctx context.Context, enabled bool) error {
 	if err != nil {
 		return err
 	}
-	if apiMode == deviceAPIModern {
+	if apiMode != deviceAPILegacy {
 		return s.modernSetLED(ctx, enabled)
 	}
 	ledOff := 1
@@ -303,7 +307,7 @@ func (s *Strip) DailyEnergy(ctx context.Context, outletID string, date time.Time
 	if err != nil {
 		return nil, err
 	}
-	if apiMode == deviceAPIModern {
+	if apiMode != deviceAPILegacy {
 		return s.modernDailyEnergy(ctx, outletID, date)
 	}
 	params := map[string]int{"month": int(date.Month()), "year": date.Year()}
@@ -345,7 +349,7 @@ func (s *Strip) MonthlyEnergy(ctx context.Context, outletID string, year int) ([
 	if err != nil {
 		return nil, err
 	}
-	if apiMode == deviceAPIModern {
+	if apiMode != deviceAPILegacy {
 		return s.modernMonthlyEnergy(ctx, outletID, year)
 	}
 	request := childRequest(outletID, "emeter", "get_monthstat", map[string]int{"year": year})

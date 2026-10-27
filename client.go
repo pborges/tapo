@@ -82,9 +82,10 @@ func WithDisableLegacy() Option {
 	}
 }
 
-// Strip is a client for a Kasa/Tapo power strip. It automatically detects the
-// legacy XOR protocol on port 9999 or authenticated KLAP over HTTP on port 80.
-// It is safe for concurrent use.
+// Strip is a client for a Kasa/Tapo power strip or plug. It automatically
+// detects the legacy XOR protocol on port 9999 or authenticated KLAP over HTTP
+// on port 80. A single-socket plug such as the P110M appears as a strip with
+// one outlet whose ID is the device ID. It is safe for concurrent use.
 type Strip struct {
 	address       string
 	timeout       time.Duration
@@ -92,6 +93,8 @@ type Strip struct {
 	klap          *klapTransport
 	mode          atomic.Uint32
 	apiMode       atomic.Uint32
+	plugID        atomic.Pointer[string]
+	plugNoEmeter  atomic.Bool
 	detectMu      sync.Mutex
 	legacyMu      sync.Mutex
 	disableLegacy bool

@@ -72,15 +72,14 @@ func main() {
 			log.Fatal(err)
 		}
 		for _, device := range devices {
-			model := strings.ToUpper(device.Device.Model)
-			if !strings.HasPrefix(model, "HS300") && !strings.HasPrefix(model, "P316M") {
+			if !tapo.SupportedModel(device.Device.Model) {
 				continue
 			}
 			endpoints = append(endpoints, endpoint{host: device.Host, port: opts.port, httpPort: device.HTTPPort})
 			fmt.Fprintf(os.Stderr, "Found %s (%s) at %s\n", device.Device.Alias, device.Device.Model, device.Host)
 		}
 		if len(endpoints) == 0 {
-			log.Fatal("no HS300 or P316M devices found; pass -hosts with one or more strip IP addresses")
+			log.Fatal("no HS300, P316M, or P110M devices found; pass -hosts with one or more device IP addresses")
 		}
 	}
 
@@ -121,7 +120,7 @@ func parseOptions(args []string, stderr io.Writer) (options, error) {
 	var opts options
 	flags := flag.NewFlagSet("schedulr", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	flags.Var(&opts.hosts, "hosts", "HS300 or P316M hostnames/IPs, comma-separated or repeated (omit to discover)")
+	flags.Var(&opts.hosts, "hosts", "HS300, P316M, or P110M hostnames/IPs, comma-separated or repeated (omit to discover)")
 	flags.StringVar(&opts.subnet, "subnet", "", "IPv4 subnet to scan during discovery (bare address means /24)")
 	flags.IntVar(&opts.port, "port", tapo.DefaultPort, "local protocol port")
 	flags.DurationVar(&opts.tick, "tick", 5*time.Second, "how often to compare actual outlet state against the schedule and correct drift")

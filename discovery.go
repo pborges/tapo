@@ -156,6 +156,22 @@ func discover(ctx context.Context, timeout time.Duration, destinations ...*net.U
 	return result, nil
 }
 
+// SupportedModels lists the model prefixes this package has been built for.
+var SupportedModels = []string{"HS300", "P316M", "P110M"}
+
+// SupportedModel reports whether model, as returned in DeviceInfo or by
+// Discover, is one of SupportedModels. Regional suffixes such as "P110M(US)"
+// are accepted.
+func SupportedModel(model string) bool {
+	model = strings.ToUpper(model)
+	for _, prefix := range SupportedModels {
+		if strings.HasPrefix(model, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 func modernDiscoveryQuery() ([]byte, error) {
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {

@@ -250,7 +250,7 @@ $("#scan").addEventListener("click", async () => {
 
 function renderScan(devices) {
   if (!devices.length) {
-    $("#scanResults").innerHTML = `<p class="muted">No HS300 or P316M strips found.</p>`;
+    $("#scanResults").innerHTML = `<p class="muted">No HS300, P316M, or P110M devices found.</p>`;
     return;
   }
   $("#scanResults").innerHTML = `<div class="table-wrap"><table>

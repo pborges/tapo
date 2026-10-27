@@ -1,10 +1,10 @@
 # tapo
 
 `tapo` is a Go library and terminal dashboard for TP-Link Kasa/Tapo devices,
-with first-class support for the HS300 and P316M power strips. It automatically
-supports the legacy XOR protocol on port 9999 and authenticated KLAP v1/v2 on
-port 80. It communicates directly over the LAN; it does not use TP-Link's cloud
-API.
+with first-class support for the HS300 and P316M power strips and the P110M
+smart plug. It automatically supports the legacy XOR protocol on port 9999 and
+authenticated KLAP v1/v2 on port 80. It communicates directly over the LAN; it
+does not use TP-Link's cloud API.
 
 ## Library
 
@@ -61,6 +61,22 @@ strip, err := tapo.New(
 )
 ```
 
+The P110M plug also requires credentials. A single plug is presented as a
+strip with one outlet whose ID is the plug's device ID, so the same API (and
+every command below) works unchanged:
+
+```go
+plug, err := tapo.New(
+	"192.168.1.44",
+	tapo.WithCredentials("owner@example.com", "account-password"),
+)
+// ...
+err = plug.SetOutletAt(ctx, 0, true)
+```
+
+Plug firmware that lacks `get_emeter_data` reports power only; voltage,
+current, and the lifetime total are then zero.
+
 The main API includes:
 
 - UDP broadcast or subnet discovery with `tapo.Discover`
@@ -112,8 +128,9 @@ devices, err := tapo.Discover(ctx, 5*time.Second, "192.168.5.0")
 ```
 
 The dashboard displays discovered or explicitly configured HS300 and P316M
-strips. Use the arrow keys (or `j`/`k`) to select outlets across all strips,
-Space or Enter to toggle, `r` to refresh all strips, and `q` to quit.
+strips and P110M plugs. Use the arrow keys (or `j`/`k`) to select outlets
+across all strips, Space or Enter to toggle, `r` to refresh all strips, and `q`
+to quit.
 
 Some firmware versions require enabling local/third-party control in the Tapo
 app under **Me → Third-Party Services → Third-Party Compatibility** (or in the

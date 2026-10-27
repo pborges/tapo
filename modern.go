@@ -73,6 +73,8 @@ type modernDeviceInfo struct {
 	HWVer    string `json:"hw_ver"`
 	FWVer    string `json:"fw_ver"`
 	RSSI     int    `json:"rssi"`
+	DeviceOn bool   `json:"device_on"`
+	OnTime   int64  `json:"on_time"`
 }
 
 type modernChild struct {
@@ -94,13 +96,6 @@ func (s *Strip) modernSystemInfo(ctx context.Context) (DeviceInfo, []Outlet, err
 	if err != nil {
 		return DeviceInfo{}, nil, err
 	}
-	childrenWire, err := modernCall[modernChildList](ctx, s, modernRequest{
-		Method: "get_child_device_list", Params: map[string]int{"start_index": 0},
-	})
-	if err != nil {
-		return DeviceInfo{}, nil, err
-	}
-
 	alias := decodeModernString(infoWire.Nickname)
 	if alias == "" {
 		alias = infoWire.Model
@@ -109,6 +104,33 @@ func (s *Strip) modernSystemInfo(ctx context.Context) (DeviceInfo, []Outlet, err
 		Alias: alias, Model: infoWire.Model, DeviceID: infoWire.DeviceID, MAC: infoWire.MAC,
 		HardwareVersion: infoWire.HWVer, SoftwareVersion: infoWire.FWVer, RSSI: infoWire.RSSI,
 	}
+
+	mode, err := s.modernDeviceMode(ctx)
+	if err != nil {
+		return DeviceInfo{}, nil, err
+	}
+	if mode == deviceAPIModernPlug {
+		if infoWire.DeviceID == "" {
+			return DeviceInfo{}, nil, errors.New("tapo: get_device_info response is missing device_id")
+		}
+		// Publish the ID before the mode so that any caller observing plug
+		// mode can also route by ID.
+		s.plugID.Store(&infoWire.DeviceID)
+		s.apiMode.CompareAndSwap(deviceAPIUnknown, deviceAPIModernPlug)
+		outlets := []Outlet{{
+			Index: 0, ID: infoWire.DeviceID, Alias: alias, On: infoWire.DeviceOn,
+			OnTime: time.Duration(infoWire.OnTime) * time.Second,
+		}}
+		return info, outlets, nil
+	}
+
+	childrenWire, err := modernCall[modernChildList](ctx, s, modernRequest{
+		Method: "get_child_device_list", Params: map[string]int{"start_index": 0},
+	})
+	if err != nil {
+		return DeviceInfo{}, nil, err
+	}
+	s.apiMode.CompareAndSwap(deviceAPIUnknown, deviceAPIModern)
 	sort.SliceStable(childrenWire.Children, func(i, j int) bool {
 		return childrenWire.Children[i].Position < childrenWire.Children[j].Position
 	})
@@ -124,6 +146,38 @@ func (s *Strip) modernSystemInfo(ctx context.Context) (DeviceInfo, []Outlet, err
 		}
 	}
 	return info, outlets, nil
+}
+
+type modernComponents struct {
+	Components []struct {
+		ID      string `json:"id"`
+		VerCode int    `json:"ver_code"`
+	} `json:"component_list"`
+}
+
+// modernDeviceMode reports whether a modern device is a multi-outlet strip or
+// a single plug. Strips advertise the control_child component; a device that
+// does not, such as the P110M, is a plug. Devices that reject component
+// negotiation are assumed to be strips, which was the only modern device type
+// supported before plugs.
+func (s *Strip) modernDeviceMode(ctx context.Context) (uint32, error) {
+	if mode := s.apiMode.Load(); mode == deviceAPIModern || mode == deviceAPIModernPlug {
+		return mode, nil
+	}
+	result, err := modernCall[modernComponents](ctx, s, modernRequest{Method: "component_nego", Params: nil})
+	if err != nil {
+		var deviceErr *DeviceError
+		if errors.As(err, &deviceErr) {
+			return deviceAPIModern, nil
+		}
+		return deviceAPIUnknown, err
+	}
+	for _, component := range result.Components {
+		if component.ID == "control_child" {
+			return deviceAPIModern, nil
+		}
+	}
+	return deviceAPIModernPlug, nil
 }
 
 func decodeModernString(value string) string {
@@ -149,7 +203,25 @@ type modernControlResult[T any] struct {
 	ResponseData modernResponseData[T] `json:"responseData"`
 }
 
+// modernControlChild sends child to one outlet. On a strip it is wrapped in
+// control_child; on a plug the only outlet is the device itself, so child is
+// sent directly.
 func modernControlChild[T any](ctx context.Context, s *Strip, outletID string, child modernRequest) (*T, error) {
+	if s.apiMode.Load() == deviceAPIModernPlug {
+		if id := s.plugID.Load(); id == nil || *id != outletID {
+			return nil, fmt.Errorf("tapo: unknown outlet ID %q", outletID)
+		}
+		// Setters reply with only an error code, so a missing result is not
+		// an error here; callers that need one check for nil.
+		var response modernResponse[T]
+		if err := s.query(ctx, child, &response); err != nil {
+			return nil, err
+		}
+		if err := checkModernDeviceError(child.Method, response.ErrorCode, response.ErrorMsg); err != nil {
+			return nil, err
+		}
+		return response.Result, nil
+	}
 	requestData := modernRequest{
 		Method: "multipleRequest",
 		Params: map[string]any{"requests": []modernRequest{child}},
@@ -180,9 +252,23 @@ type modernEnergy struct {
 }
 
 func (s *Strip) modernEnergy(ctx context.Context, outletID string) (Energy, error) {
+	if s.plugNoEmeter.Load() {
+		return s.plugEnergyUsage(ctx, outletID)
+	}
 	result, err := modernControlChild[modernEnergy](ctx, s, outletID, modernRequest{
 		Method: "get_emeter_data", Params: nil,
 	})
+	var deviceErr *DeviceError
+	if err != nil && errors.As(err, &deviceErr) && s.apiMode.Load() == deviceAPIModernPlug {
+		// Plugs with version 1 of the energy_monitoring component only
+		// report power; remember that so later reads skip the failing call.
+		energy, usageErr := s.plugEnergyUsage(ctx, outletID)
+		if usageErr != nil {
+			return Energy{}, errors.Join(err, usageErr)
+		}
+		s.plugNoEmeter.Store(true)
+		return energy, nil
+	}
 	if err != nil {
 		return Energy{}, err
 	}
@@ -195,6 +281,25 @@ func (s *Strip) modernEnergy(ctx context.Context, outletID string) (Energy, erro
 		Power:   valueOrZero(result.PowerMW) / 1000,
 		Total:   valueOrZero(result.EnergyWH) / 1000,
 	}, nil
+}
+
+type modernEnergyUsage struct {
+	CurrentPowerMW *float64 `json:"current_power"`
+}
+
+// plugEnergyUsage reads power from get_energy_usage, which every metering plug
+// supports. It has no voltage, current, or lifetime total, so those are zero.
+func (s *Strip) plugEnergyUsage(ctx context.Context, outletID string) (Energy, error) {
+	result, err := modernControlChild[modernEnergyUsage](ctx, s, outletID, modernRequest{
+		Method: "get_energy_usage", Params: nil,
+	})
+	if err != nil {
+		return Energy{}, err
+	}
+	if result == nil || result.CurrentPowerMW == nil {
+		return Energy{}, errors.New("tapo: response is missing get_energy_usage current_power")
+	}
+	return Energy{Power: *result.CurrentPowerMW / 1000}, nil
 }
 
 func valueOrZero(value *float64) float64 {

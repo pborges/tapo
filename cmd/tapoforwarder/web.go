@@ -153,7 +153,7 @@ func (s *server) scan(w http.ResponseWriter, r *http.Request) {
 	added := s.manager.hosts()
 	results := []scanResult{}
 	for _, device := range devices {
-		if !supportedModel(device.Device.Model) {
+		if !tapo.SupportedModel(device.Device.Model) {
 			continue
 		}
 		results = append(results, scanResult{
@@ -165,11 +165,6 @@ func (s *server) scan(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"subnet": subnet, "devices": results})
-}
-
-func supportedModel(model string) bool {
-	model = strings.ToUpper(model)
-	return strings.HasPrefix(model, "HS300") || strings.HasPrefix(model, "P316M")
 }
 
 func (s *server) addStrip(w http.ResponseWriter, r *http.Request) {

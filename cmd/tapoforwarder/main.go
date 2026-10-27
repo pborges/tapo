@@ -1,7 +1,7 @@
-// Command tapoforwarder polls HS300 and P316M power strips in the background,
-// exposes their meter readings as Prometheus metrics, and serves a small web
-// UI for discovering, managing, and switching strips. The managed strip list
-// is kept in a JSON config file.
+// Command tapoforwarder polls HS300 and P316M power strips and P110M plugs in
+// the background, exposes their meter readings as Prometheus metrics, and
+// serves a small web UI for discovering, managing, and switching them. The
+// managed device list is kept in a JSON config file.
 package main
 
 import (

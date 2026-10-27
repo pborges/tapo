@@ -80,6 +80,12 @@ func (f *fakeP316M) handle(conn net.Conn) {
 			map[string]any{"nickname": base64.StdEncoding.EncodeToString([]byte("NAS")), "device_id": "child-2", "device_on": false, "on_time": 0, "position": 2},
 			map[string]any{"nickname": base64.StdEncoding.EncodeToString([]byte("Router")), "device_id": "child-1", "device_on": true, "on_time": 90, "position": 1},
 		}})
+	case "component_nego":
+		response = modernTestResponse(map[string]any{"component_list": []any{
+			map[string]any{"id": "device", "ver_code": 2},
+			map[string]any{"id": "child_device", "ver_code": 1},
+			map[string]any{"id": "control_child", "ver_code": 2},
+		}})
 	case "control_child":
 		response = f.controlChild(envelope.Params)
 	case "get_led_info":
